@@ -1,5 +1,7 @@
 ---
 icingaweb2_resource_name: icingaweb2_db
+icingaweb2_mysql_privileged_user: root
+icingaweb2_mysql_privileged_password: "{{ mysql_root_pass }}"
 icingaweb2_db_host: localhost
 icingaweb2_db_name: icingaweb2
 icingaweb2_db_user: icingaweb2

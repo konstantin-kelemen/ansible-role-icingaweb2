@@ -17,6 +17,9 @@
 
 - name: Create Icingaweb2 user and give him propper privileges (remote)
   mysql_user:
+    login_user: "{{ icingaweb2_mysql_privileged_user }}"
+    login_password: "{{ icingaweb2_mysql_privileged_password }}"
+    login_host: "{{ icingaweb2_db_host }}"
     name: "{{ icingaweb2_db_user }}"
     password: "{{ icingaweb2_db_password }}"
     priv: "{{ icingaweb2_db_name }}.*:ALL"
@@ -24,80 +27,84 @@
     host: "{{ hostvars[item]['ansible_ssh_host'] }}"
   with_items: "{{ groups['master'] }}"
   run_once: true
-  delegate_to: "{{ percona_cluster_bootstrap_hostname }}"
 
 - name: Create Icingaweb2 user and give him propper privileges (local)
   mysql_user:
+    login_user: "{{ icingaweb2_mysql_privileged_user }}"
+    login_password: "{{ icingaweb2_mysql_privileged_password }}"
+    login_host: "{{ icingaweb2_db_host }}"
     name: "{{ icingaweb2_db_user }}"
     password: "{{ icingaweb2_db_password }}"
     priv: "{{ icingaweb2_db_name }}.*:ALL"
     state: present
   run_once: true
-  delegate_to: "{{ percona_cluster_bootstrap_hostname }}"
 
 - name: Import database structure
   mysql_db:
     state: import
     login_user: "{{ icingaweb2_db_user }}"
     login_password: "{{ icingaweb2_db_password }}"
-    login_host: "{{ percona_cluster_bootstrap_hostname }}"
+    login_host: "{{ icingaweb2_db_host }}"
     name: "{{ icingaweb2_db_name }}"
     target: /usr/share/doc/icingaweb2/schema/mysql.schema.sql
   run_once: true
-  delegate_to: "{{ hostvars[groups['master'][0]]['inventory_hostname'] }}"
 
 - name: Generate icingaweb2 Admin password
   shell: "openssl passwd -1 {{ icingaweb2_admin_pass }}"
   register: icingaweb2_admin_pass_hash
 
 - name: Set icingaweb2 Admin password
-  command: mysql -e "INSERT INTO {{ icingaweb2_db_name }}.icingaweb_user (name, active, password_hash) VALUES ('{{ icingaweb2_admin_login }}', 1, '{{ icingaweb2_admin_pass_hash.stdout }}');"
+  command: mysql -u "{{ icingaweb2_db_user }}" --password="{{ icingaweb2_db_password }}" -h "{{ icingaweb2_db_host }}" -e "INSERT INTO {{ icingaweb2_db_name }}.icingaweb_user (name, active, password_hash) VALUES ('{{ icingaweb2_admin_login }}', 1, '{{ icingaweb2_admin_pass_hash.stdout }}');"
   run_once: true
-  delegate_to: "{{ percona_cluster_bootstrap_hostname }}"
 
-- template:
+- name: Generate /etc/icingaweb2/config.ini
+  template:
     src: config.ini.j2
     dest: /etc/icingaweb2/config.ini
 
-- template:
+- name: Generate /etc/icingaweb2/authentication.ini
+  template:
     src: authentication.ini.j2
     dest: /etc/icingaweb2/authentication.ini
 
-- name: Generate groups.ini
+- name: Generate /etc/icingaweb2/groups.ini
   template:
     src: groups.ini.j2
     dest: /etc/icingaweb2/groups.ini
 
-- template:
+- name: Generate /etc/icingaweb2/roles.ini
+  template:
     src: roles.ini.j2
     dest: /etc/icingaweb2/roles.ini
 
-- template:
+- name: /etc/icingaweb2/resources.ini
+  template:
     src: resources.ini.j2
     dest: /etc/icingaweb2/resources.ini
 
-- file: dest=/etc/icingaweb2/modules/monitoring state=directory
+- name: Create a directory for monitoring module
+  file:
+    dest: /etc/icingaweb2/modules/monitoring
+    state: directory
 
-- template:
+- name: Generate /etc/icingaweb2/modules/monitoring/backends.ini
+  template:
     src: modules-monitoring-backends.ini.j2
     dest: /etc/icingaweb2/modules/monitoring/backends.ini
 
-- template:
+- name: Generate /etc/icingaweb2/modules/monitoring/commandtransports.ini
+  template:
     src: modules-monitoring-commandtransports.ini.j2
     dest: /etc/icingaweb2/modules/monitoring/commandtransports.ini
 
-- template:
+- name: Genereate /etc/icingaweb2/modules/monitoring/config.ini
+  template:
     src: modules-monitoring-config.ini.j2
     dest: /etc/icingaweb2/modules/monitoring/config.ini
 
 - name: Enable icingaweb2 monitoring module
   shell: icingacli module enable monitoring
 
-#d3
+# Use handler here
 - name: Restart httpd
   service: name=httpd state=restarted
-
-#
-#Module "monitoring" has been successfully enabled.
-#
-#Finally visit Icinga Web 2 in your browser to login as icingaadmin user: /icingaweb2.
