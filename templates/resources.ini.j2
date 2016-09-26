@@ -1,0 +1,21 @@
+[icinga2]
+type = "db"
+db = "mysql"
+host = "{{ percona_cluster_bootstrap_hostname }}"
+port = "3306"
+dbname = "{{ icinga2_db_name }}"
+username = "{{ icinga2_db_user }}"
+password = "{{ icinga2_db_password }}"
+charset = ""
+persistent = "0"
+
+[{{ icingaweb2_resource_name }}]
+type = "db"
+db = "mysql"
+host = "{{ percona_cluster_bootstrap_hostname }}"
+port = "3306"
+dbname = "{{ icingaweb2_db_name }}"
+username = "{{ icingaweb2_db_user }}"
+password = "{{ icingaweb2_db_password }}"
+charset = ""
+persistent = "0"
