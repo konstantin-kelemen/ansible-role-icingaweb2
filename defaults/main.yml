@@ -1,11 +1,18 @@
 ---
-icingaweb2_resource_name: icingaweb2_db
+icingaweb2_resource_name: icingaweb2
 icingaweb2_mysql_privileged_user: root
 icingaweb2_mysql_privileged_password: "{{ mysql_root_pass }}"
-icingaweb2_db_host: localhost
+icingaweb2_db_host: "{{ groups.percona[0] }}"
 icingaweb2_db_name: icingaweb2
 icingaweb2_db_user: icingaweb2
-icingaweb2_db_password: iloveicingaweb2too
+icingaweb2_db_password: iloveicingaweb2
 icingaweb2_php_timezone: "Europe/Amsterdam"
 icingaweb2_admin_login: Admin
 icingaweb2_admin_pass: changeme
+icingaweb2_director_db_host: "{{ groups.percona[0] }}"
+icingaweb2_director_db_name: director
+icingaweb2_director_db_user: director
+icingaweb2_director_db_password: ilovedirector
+icinga2_master_node: "{{ groups.master[0] }}"
+icingaweb2_director_api_login: root
+icingaweb2_director_api_password: "{{ icinga2_api_root_password }}"

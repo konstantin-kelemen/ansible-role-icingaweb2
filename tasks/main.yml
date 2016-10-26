@@ -5,21 +5,22 @@
   - httpd
   - icingaweb2
   - icingacli
+  - mysql
+  - MySQL-python
 
 - name: Set date.timezone in /etc/php.ini
   replace: dest=/etc/php.ini regexp='^;date.timezone =$' replace='date.timezone = {{ icingaweb2_php_timezone }}'
-  notify: restart-httpd
+
+- name: Enable and start httpd
+  service: name=httpd enabled=yes state=started
 
 - name: Create Icingaweb2 database
   mysql_db: name={{ icingaweb2_db_name }} state=present
   run_once: true
-  delegate_to: "{{ percona_cluster_bootstrap_hostname }}"
+  delegate_to: "{{ icingaweb2_db_host }}"
 
-- name: Create Icingaweb2 user and give him propper privileges (remote)
+- name: Create remote Icingaweb2 user and give him propper privileges
   mysql_user:
-    login_user: "{{ icingaweb2_mysql_privileged_user }}"
-    login_password: "{{ icingaweb2_mysql_privileged_password }}"
-    login_host: "{{ icingaweb2_db_host }}"
     name: "{{ icingaweb2_db_user }}"
     password: "{{ icingaweb2_db_password }}"
     priv: "{{ icingaweb2_db_name }}.*:ALL"
@@ -27,17 +28,16 @@
     host: "{{ hostvars[item]['ansible_ssh_host'] }}"
   with_items: "{{ groups['master'] }}"
   run_once: true
+  delegate_to: "{{ icingaweb2_db_host }}"
 
-- name: Create Icingaweb2 user and give him propper privileges (local)
+- name: Create local Icingaweb2 user and give him propper privileges
   mysql_user:
-    login_user: "{{ icingaweb2_mysql_privileged_user }}"
-    login_password: "{{ icingaweb2_mysql_privileged_password }}"
-    login_host: "{{ icingaweb2_db_host }}"
     name: "{{ icingaweb2_db_user }}"
     password: "{{ icingaweb2_db_password }}"
     priv: "{{ icingaweb2_db_name }}.*:ALL"
     state: present
   run_once: true
+  delegate_to: "{{ icingaweb2_db_host }}"
 
 - name: Import database structure
   mysql_db:
@@ -50,61 +50,257 @@
   run_once: true
 
 - name: Generate icingaweb2 Admin password
-  shell: "openssl passwd -1 {{ icingaweb2_admin_pass }}"
+  command: "openssl passwd -1 {{ icingaweb2_admin_pass }}"
   register: icingaweb2_admin_pass_hash
-
-- name: Set icingaweb2 Admin password
-  command: mysql -u "{{ icingaweb2_db_user }}" --password="{{ icingaweb2_db_password }}" -h "{{ icingaweb2_db_host }}" -e "INSERT INTO {{ icingaweb2_db_name }}.icingaweb_user (name, active, password_hash) VALUES ('{{ icingaweb2_admin_login }}', 1, '{{ icingaweb2_admin_pass_hash.stdout }}');"
   run_once: true
 
-- name: Generate /etc/icingaweb2/config.ini
-  template:
-    src: config.ini.j2
-    dest: /etc/icingaweb2/config.ini
+  args:
+    warn: False
+  tags:
+  - skip_ansible_lint
 
-- name: Generate /etc/icingaweb2/authentication.ini
-  template:
-    src: authentication.ini.j2
-    dest: /etc/icingaweb2/authentication.ini
+- name: Set icingaweb2 Admin password
+  command: >
+    mysql -e '
+    INSERT INTO {{ icingaweb2_db_name }}.icingaweb_user (name, active, password_hash)
+    VALUES ("{{ icingaweb2_admin_login }}", 1, "{{ icingaweb2_admin_pass_hash.stdout }}");
+    '
+  run_once: true
+  delegate_to: "{{ icingaweb2_db_host }}"
 
-- name: Generate /etc/icingaweb2/groups.ini
-  template:
-    src: groups.ini.j2
-    dest: /etc/icingaweb2/groups.ini
-
-- name: Generate /etc/icingaweb2/roles.ini
-  template:
-    src: roles.ini.j2
-    dest: /etc/icingaweb2/roles.ini
-
-- name: /etc/icingaweb2/resources.ini
-  template:
-    src: resources.ini.j2
-    dest: /etc/icingaweb2/resources.ini
+  args:
+    warn: False
+  tags:
+  - skip_ansible_lint
 
 - name: Create a directory for monitoring module
   file:
     dest: /etc/icingaweb2/modules/monitoring
     state: directory
 
-- name: Generate /etc/icingaweb2/modules/monitoring/backends.ini
-  template:
-    src: modules-monitoring-backends.ini.j2
-    dest: /etc/icingaweb2/modules/monitoring/backends.ini
-
-- name: Generate /etc/icingaweb2/modules/monitoring/commandtransports.ini
-  template:
-    src: modules-monitoring-commandtransports.ini.j2
-    dest: /etc/icingaweb2/modules/monitoring/commandtransports.ini
-
-- name: Genereate /etc/icingaweb2/modules/monitoring/config.ini
-  template:
-    src: modules-monitoring-config.ini.j2
-    dest: /etc/icingaweb2/modules/monitoring/config.ini
+- name: Generate configs
+  template: src="{{ item.source }}" dest="{{ item.destination }}"
+  with_items:
+  - { source: "config.ini.j2", destination: "/etc/icingaweb2/config.ini" }
+  - { source: "authentication.ini.j2", destination: "/etc/icingaweb2/authentication.ini" }
+  - { source: "groups.ini.j2", destination: "/etc/icingaweb2/groups.ini" }
+  - { source: "roles.ini.j2", destination: "/etc/icingaweb2/roles.ini" }
+  - { source: "resources.ini.j2", destination: "/etc/icingaweb2/resources.ini" }
+  - { source: "modules-monitoring-backends.ini.j2", destination: "/etc/icingaweb2/modules/monitoring/backends.ini" }
+  - { source: "modules-monitoring-commandtransports.ini.j2", destination: "/etc/icingaweb2/modules/monitoring/commandtransports.ini" }
+  - { source: "modules-monitoring-config.ini.j2", destination: "/etc/icingaweb2/modules/monitoring/config.ini" }
 
 - name: Enable icingaweb2 monitoring module
-  shell: icingacli module enable monitoring
+  command: icingacli module enable monitoring
+  args:
+    warn: False
+    creates: "/etc/icingaweb2/enabledModules/monitoring"
 
-# Use handler here
-- name: Restart httpd
-  service: name=httpd state=restarted
+# The director module part
+- name: Create director database
+  mysql_db: name={{ icingaweb2_director_db_name }} state=present
+  run_once: true
+  delegate_to: "{{ icingaweb2_director_db_host }}"
+
+- name: Create remote director user and give him propper privileges
+  mysql_user:
+    name: "{{ icingaweb2_director_db_user }}"
+    password: "{{ icingaweb2_director_db_password }}"
+    priv: "{{ icingaweb2_director_db_name }}.*:ALL"
+    state: present
+    host: "{{ hostvars[item]['ansible_ssh_host'] }}"
+  with_items: "{{ groups['master'] }}"
+  run_once: true
+  delegate_to: "{{ icingaweb2_director_db_host }}"
+
+- name: Create local director user and give him propper privileges
+  mysql_user:
+    name: "{{ icingaweb2_director_db_user }}"
+    password: "{{ icingaweb2_director_db_password }}"
+    priv: "{{ icingaweb2_director_db_name }}.*:ALL"
+    state: present
+  run_once: true
+  delegate_to: "{{ icingaweb2_director_db_host }}"
+
+- name: Install director module
+  git: repo=https://github.com/Icinga/icingaweb2-module-director.git dest=/usr/share/icingaweb2/modules/director version=4721915
+  run_once: true
+
+- name: Create director config folder
+  file: dest=/etc/icingaweb2/modules/director state=directory
+  run_once: true
+
+- name: Copy director config
+  copy: src=config.ini dest=/etc/icingaweb2/modules/director/config.ini
+  run_once: true
+
+- name: Generate director kickstart file
+  template: src=kickstart.ini.j2 dest=/etc/icingaweb2/modules/director/kickstart.ini
+  run_once: true
+
+- name: Enable icingaweb2 director module
+  command: icingacli module enable director
+  run_once: true
+  args:
+    warn: False
+    creates: "/etc/icingaweb2/enabledModules/director"
+
+- name: Check if scheme import is required
+  command: icingacli director migration pending --verbose
+  register: icingaweb2_director_import
+  changed_when: false
+  run_once: true
+  args:
+    warn: False
+  tags:
+  - skip_ansible_lint
+
+- name: Import scheme if it is required
+  command: icingacli director migration run --verbose
+  when: icingaweb2_director_import != "There are no pending migrations"
+  run_once: true
+  args:
+    warn: False
+
+- name: Kickstart director
+  command: icingacli director kickstart run
+  run_once: true
+  args:
+    warn: False
+  tags:
+  - skip_ansible_lint
+
+#- name: My dirty hack
+#  command: >
+#    mysql -u "{{ icingaweb2_director_db_user }}"
+#    --password="{{ icingaweb2_director_db_password }}"
+#    -h "{{ icingaweb2_director_db_host }}"
+#    -e '
+#    UPDATE {{ icingaweb2_director_db_name }}.icinga_endpoint SET object_name = "icinga2-master01.kel.mn", object_type = "object", host = "icinga2-master01.kel.mn", port = "5665";
+#    UPDATE {{ icingaweb2_director_db_name }}.icinga_zone SET object_name = "master", object_type = "object";
+#    UPDATE {{ icingaweb2_director_db_name }}.director_setting SET setting_value = "master";
+#    '
+#  run_once: true
+#  args:
+#    warn: False
+#  tags:
+#  - skip_ansible_lint
+
+- name: My dirty hack v2
+  command: >
+    mysql -u "{{ icingaweb2_director_db_user }}"
+    --password="{{ icingaweb2_director_db_password }}"
+    -h "{{ icingaweb2_director_db_host }}"
+    -e '
+    UPDATE {{ icingaweb2_director_db_name }}.icinga_endpoint SET object_type = "object";
+    UPDATE {{ icingaweb2_director_db_name }}.icinga_zone SET object_type = "object";
+    '
+  run_once: true
+  args:
+    warn: False
+  tags:
+  - skip_ansible_lint
+
+- name: Update icinga2.conf
+  lineinfile: dest=/etc/icinga2/icinga2.conf regexp='^include "zones.conf"' line='# include "zones.conf"'
+
+- name: Deploy director config
+  uri:
+    headers:
+      Accept: "application/json"
+    method: "POST"
+    user: "{{ icingaweb2_admin_login }}"
+    password: "{{ icingaweb2_admin_pass }}"
+    url: "http://{{ groups.master[0] }}/icingaweb2/director/config/deploy"
+  run_once: true
+
+- name: Create endpiont template
+  uri:
+    headers:
+      Accept: "application/json"
+    method: "POST"
+    user: "{{ icingaweb2_admin_login }}"
+    password: "{{ icingaweb2_admin_pass }}"
+    url: "http://{{ groups.master[0] }}/icingaweb2/director/endpoint"
+    body_format: json
+    body: |
+      {
+          "object_name": "Endpoint Template",
+          "object_type": "template"
+      }
+    status_code: 201
+  run_once: true
+
+- name: Assign template to first master endpoint
+  uri:
+    headers:
+      Accept: "application/json"
+    method: "POST"
+    user: "{{ icingaweb2_admin_login }}"
+    password: "{{ icingaweb2_admin_pass }}"
+    url: "http://{{ groups.master[0] }}/icingaweb2/director/endpoint?name={{ groups.master[0] }}"
+    body_format: json
+    body: |
+      {
+          "imports": [ "Endpoint Template" ]
+      }
+  run_once: true
+
+- name: Create director-global zone
+  uri:
+    headers:
+      Accept: "application/json"
+    method: "POST"
+    user: "{{ icingaweb2_admin_login }}"
+    password: "{{ icingaweb2_admin_pass }}"
+    url: "http://{{ groups.master[0] }}/icingaweb2/director/zone"
+    body_format: json
+    body: |
+      {
+          "is_global": true,
+          "object_name": "director-global",
+          "object_type": "object"
+      }
+    status_code: 201
+  run_once: true
+
+# Start tasks for satellite
+- name: Assign template to second master endpoint
+  uri:
+    headers:
+      Accept: "application/json"
+    method: "POST"
+    user: "{{ icingaweb2_admin_login }}"
+    password: "{{ icingaweb2_admin_pass }}"
+    url: "http://{{ groups.master[0] }}/icingaweb2/director/endpoint?name={{ groups.master[1] }}"
+    body_format: json
+    body: |
+      {
+          "imports": [ "Endpoint Template" ]
+      }
+  run_once: true
+
+- name: Disable conf.d configs except for conf.d/api-users.conf
+  lineinfile: dest=/etc/icinga2/icinga2.conf regexp='^include_recursive "conf.d"' line='include "conf.d/api-users.conf"'
+
+- name: Deploy director config second time
+  uri:
+    headers:
+      Accept: "application/json"
+    method: "POST"
+    user: "{{ icingaweb2_admin_login }}"
+    password: "{{ icingaweb2_admin_pass }}"
+    url: "http://{{ groups.master[0] }}/icingaweb2/director/config/deploy"
+  run_once: true
+
+- name: Wait for director config to deploy
+  wait_for: path=/var/lib/icinga2/api/zones/director-global
+  run_once: true
+  delegate_to: "{{ groups.master[1] }}"
+
+- name: Restart icinga2 service
+  service: name=icinga2 state=restarted
+  run_once: true
+  delegate_to: "{{ groups.master[1] }}"
+# End tasks for satellite
+# End of the director module part

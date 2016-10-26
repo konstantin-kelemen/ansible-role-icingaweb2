@@ -1,6 +1,4 @@
 ---
-- name: restart-icinga2
-  service: name=icinga2 state=restarted
-
+#Not needed any more
 - name: restart-httpd
   service: name=httpd state=restarted
